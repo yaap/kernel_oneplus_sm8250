@@ -684,13 +684,10 @@ static int cnss_set_pci_link(struct cnss_pci_data *pci_priv, bool link_up)
 	enum msm_pcie_pm_opt pm_ops;
 	int retry = 0;
 
-	cnss_pr_vdbg("%s PCI link\n", link_up ? "Resuming" : "Suspending");
-
 	if (link_up) {
 		pm_ops = MSM_PCIE_RESUME;
 	} else {
 		if (pci_priv->drv_connected_last) {
-			cnss_pr_vdbg("Use PCIe DRV suspend\n");
 			pm_ops = MSM_PCIE_DRV_SUSPEND;
 			if (pci_priv->device_id != QCA6390_DEVICE_ID)
 				cnss_set_pci_link_status(pci_priv, PCI_GEN1);
@@ -889,17 +886,6 @@ void cnss_pci_allow_l1(struct device *dev)
 }
 EXPORT_SYMBOL(cnss_pci_allow_l1);
 
-static void cnss_pci_update_link_event(struct cnss_pci_data *pci_priv,
-				       enum cnss_bus_event_type type,
-				       void *data)
-{
-	struct cnss_bus_event bus_event;
-
-	bus_event.etype = type;
-	bus_event.event_data = data;
-	cnss_pci_call_driver_uevent(pci_priv, CNSS_BUS_EVENT, &bus_event);
-}
-
 static void cnss_pci_handle_linkdown(struct cnss_pci_data *pci_priv)
 {
 	struct cnss_plat_data *plat_priv = pci_priv->plat_priv;
@@ -923,12 +909,6 @@ static void cnss_pci_handle_linkdown(struct cnss_pci_data *pci_priv)
 
 	if (pci_dev->device == QCA6174_DEVICE_ID)
 		disable_irq(pci_dev->irq);
-
-	/* Notify bus related event. Now for all supported chips.
-	 * Here PCIe LINK_DOWN notification taken care.
-	 * uevent buffer can be extended later, to cover more bus info.
-	 */
-	cnss_pci_update_link_event(pci_priv, BUS_EVENT_PCI_LINK_DOWN, NULL);
 
 	cnss_fatal_err("PCI link down, schedule recovery\n");
 	cnss_schedule_recovery(&pci_dev->dev, CNSS_REASON_LINK_DOWN);
@@ -4257,8 +4237,8 @@ static void cnss_pci_remove_dump_seg(struct cnss_pci_data *pci_priv,
 	cnss_minidump_remove_region(plat_priv, type, seg_no, va, pa, size);
 }
 
-int cnss_pci_call_driver_uevent(struct cnss_pci_data *pci_priv,
-				enum cnss_driver_status status, void *data)
+int cnss_call_driver_uevent(struct cnss_pci_data *pci_priv,
+			    enum cnss_driver_status status, void *data)
 {
 	struct cnss_uevent_data uevent_data;
 	struct cnss_wlan_driver *driver_ops;
@@ -4318,7 +4298,7 @@ static void cnss_pci_send_hang_event(struct cnss_pci_data *pci_priv)
 		}
 	}
 
-	cnss_pci_call_driver_uevent(pci_priv, CNSS_HANG_EVENT, &hang_event);
+	cnss_call_driver_uevent(pci_priv, CNSS_HANG_EVENT, &hang_event);
 
 	kfree(hang_event.hang_event_data);
 	hang_event.hang_event_data = NULL;
@@ -4333,6 +4313,7 @@ void cnss_pci_collect_dump_info(struct cnss_pci_data *pci_priv, bool in_panic)
 		plat_priv->ramdump_info_v2.dump_data_vaddr;
 	struct image_info *fw_image, *rddm_image;
 	struct cnss_fw_mem *fw_mem = plat_priv->fw_mem;
+	char sfr_buf[SFR_BUF_SIZE];
 	int ret, i, j;
 
 	if (test_bit(CNSS_DEV_ERR_NOTIFY, &plat_priv->driver_state))
@@ -4389,7 +4370,7 @@ void cnss_pci_collect_dump_info(struct cnss_pci_data *pci_priv, bool in_panic)
 
 	dump_data->nentries += rddm_image->entries;
 
-	mhi_dump_sfr(pci_priv->mhi_ctrl);
+	mhi_dump_sfr(pci_priv->mhi_ctrl, sfr_buf, sizeof(sfr_buf));
 
 	cnss_pr_dbg("Collect remote heap dump segment\n");
 
