@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/delay.h>
@@ -1005,6 +1005,22 @@ int dsi_panel_backlight_get(void)
 		return saved_backlight;
 }
 
+static int dsi_panel_dcs_set_display_brightness_c2(struct mipi_dsi_device *dsi,
+			u32 bl_lvl)
+{
+	u16 brightness = (u16)bl_lvl;
+	u8 first_byte = brightness & 0xff;
+	u8 second_byte = brightness >> 8;
+	u8 payload[8] = {second_byte, first_byte,
+		second_byte, first_byte,
+		second_byte, first_byte,
+		second_byte, first_byte};
+
+	return mipi_dsi_dcs_write(dsi, 0xC2, payload, sizeof(payload));
+}
+
+
+
 static int dsi_panel_update_backlight(struct dsi_panel *panel,
 	u32 bl_lvl)
 {
@@ -1012,6 +1028,7 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 	u32 count;
 	struct mipi_dsi_device *dsi;
 	struct dsi_display_mode *mode;
+	struct dsi_backlight_config *bl;
 
 	if (!panel || (bl_lvl > 0xffff) || !panel->cur_mode) {
 		DSI_ERR("invalid params\n");
@@ -1082,7 +1099,10 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 			rc = iris_update_backlight(1, bl_lvl);
 		else
 #endif
-			rc = mipi_dsi_dcs_set_display_brightness(dsi, bl_lvl);
+	if (panel->bl_config.bl_dcs_subtype == 0xc2)
+		rc = dsi_panel_dcs_set_display_brightness_c2(dsi, bl_lvl);
+	else
+		rc = mipi_dsi_dcs_set_display_brightness(dsi, bl_lvl);
 
 	}
 	if (rc < 0)
@@ -2502,7 +2522,7 @@ static int dsi_panel_create_cmd_packets(const char *data,
 		cmd[i].msg.type = data[0];
 		cmd[i].last_command = (data[1] == 1);
 		cmd[i].msg.channel = data[2];
-		cmd[i].msg.flags |= (data[3] == 1 ? MIPI_DSI_MSG_REQ_ACK : 0);
+		cmd[i].msg.flags |= data[3];
 		cmd[i].msg.ctrl = 0;
 		cmd[i].post_wait_ms = cmd[i].msg.wait_ms = data[4];
 		cmd[i].msg.tx_len = ((data[5] << 8) | (data[6]));
@@ -3077,6 +3097,16 @@ static int dsi_panel_parse_bl_config(struct dsi_panel *panel)
 		panel->bl_config.brightness_max_level = 255;
 	} else {
 		panel->bl_config.brightness_max_level = val;
+	}
+
+	rc = utils->read_u32(utils->data, "qcom,mdss-dsi-bl-ctrl-dcs-subtype",
+		&val);
+	if (rc) {
+		DSI_DEBUG("[%s] bl-ctrl-dcs-subtype, defautling to zero\n",
+			panel->name);
+		panel->bl_config.bl_dcs_subtype = 0;
+	} else {
+		panel->bl_config.bl_dcs_subtype = val;
 	}
 
 	if (panel->bl_config.type == DSI_BACKLIGHT_PWM) {
